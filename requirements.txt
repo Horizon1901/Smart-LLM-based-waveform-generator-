@@ -1,0 +1,33 @@
+# PicoWave Assistant runtime dependencies.
+#
+# Core orchestration uses only the Python standard library (urllib for Ollama),
+# so the pipeline runs with NOTHING installed here except the voice extras.
+#
+# Voice (offline):
+pocketsphinx>=5.1.0    # speech-to-text; needs system: libasound2-dev, swig
+# 5.1.0 is the first release with official Python 3.14 wheels/support -- an
+# older resolved version (5.0.x) can fail to import on 3.14 with no useful
+# error, which was indistinguishable from other failures until stt.py started
+# capturing and surfacing the real init exception.
+# espeak-ng is a SYSTEM package (apt install espeak-ng), invoked as a binary.
+#
+# sounddevice is REQUIRED, not optional: pocketsphinx's LiveSpeech (the class
+# that actually opens the microphone) uses it internally as of pocketsphinx
+# 5.x -- NOT pyaudio, which is what older tutorials assume. The common
+# gotcha: `pip install sounddevice` only installs the Python wrapper: the
+# underlying PortAudio C library is a SEPARATE system package
+# (sudo apt install libportaudio2) and its absence is otherwise invisible
+# until you actually click Voice and hit a raw runtime error.
+sounddevice>=0.4.6
+
+# Vosk is an automatic fallback speech engine, used only if PocketSphinx is
+# unavailable (missing package, incomplete bundled model, etc.). It installs
+# from a prebuilt wheel with no compilation step and has none of
+# PocketSphinx's acoustic-model directory-layout fragility -- generally the
+# more reliable of the two, at some cost in recognition accuracy for very
+# short/unusual phrases. Needs a downloaded model directory; see
+# VOICE_SETUP.md for the exact one-time download command.
+vosk>=0.3.45
+
+# Optional:
+PyYAML>=6.0             # only needed to apply config/config.yaml overrides

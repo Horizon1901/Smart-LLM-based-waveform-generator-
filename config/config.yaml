@@ -1,0 +1,33 @@
+# PicoWave Assistant configuration.
+# All values below are the built-in defaults; edit to override. Requires PyYAML
+# to be applied (pip install pyyaml); without it, the dataclass defaults are used.
+
+llm:
+  host: "http://localhost:11434"     # local Ollama server
+  model: "qwen2.5-coder:7b"
+  temperature: 0.0                    # deterministic intent extraction
+  temperature_retry_step: 0.3         # escalate on freeform compile-retry
+  max_retries: 3
+  request_timeout_s: 120
+
+voice:
+  stt_enabled: true
+  stt_use_grammar: true               # constrain PocketSphinx to grammar.jsgf
+  grammar_file: "config/grammar.jsgf"
+  mic_device_index: null              # null = default input device
+  vosk_model_path: "models/vosk-model-small-en-us-0.15"  # used automatically if PocketSphinx is unavailable -- see VOICE_SETUP.md
+  tts_enabled: true
+  espeak_voice: "en"
+  espeak_speed_wpm: 165
+
+compiler:
+  sdk_mode: "mock"                    # "mock" (offline) or "real" (installed PicoSDK)
+  cc: "gcc"
+  cflags: "-O2 -Wall -Wextra"
+  pico_include: "/opt/picoscope/include"
+  pico_lib: "/opt/picoscope/lib"
+
+# Default session parameters (mutated at runtime by voice commands).
+default_samples: 1024
+default_timebase: 8
+default_range_enum: "PS2000_5V"

@@ -1,0 +1,5 @@
+# Desktop GUI dependencies. The core CLI does NOT need these.
+#   pip install -r requirements-gui.txt
+PySide6>=6.6
+matplotlib>=3.7
+numpy>=1.23

@@ -1,0 +1,20 @@
+[project]
+name = "picowave-assistant"
+version = "1.0.0"
+description = "Offline voice-controlled PicoScope 2000 code generator (STT + local LLM + auto build/run + TTS)"
+requires-python = ">=3.9"
+dependencies = []   # core runs on the stdlib; see requirements.txt for voice extras
+
+[project.optional-dependencies]
+voice = ["pocketsphinx>=5.0.0"]
+config = ["PyYAML>=6.0"]
+
+[project.scripts]
+picowave = "picowave.main:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

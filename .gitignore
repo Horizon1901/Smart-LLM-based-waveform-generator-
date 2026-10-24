@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+build/*
+!build/.gitkeep
+logs/*
+!logs/.gitkeep
+backup/*
+!backup/.gitkeep
+generated/*.csv
+generated/*.o
+# Keep generated .c files for inspection (project requirement).
+*.exe
+*.out

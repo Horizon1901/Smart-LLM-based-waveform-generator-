@@ -1,0 +1,82 @@
+#JSGF V1.0;
+
+/**
+ * Grammar: llmproject
+ * Constrains PocketSphinx recognition to the command vocabulary.
+ * A tight grammar gives far higher offline accuracy than open dictation.
+ *
+ * Every literal word below has been checked against PocketSphinx's bundled
+ * cmudict-en-us.dict. Four words in an earlier version of this grammar --
+ * "millivolts", "kilohertz", "sawtooth", "timebase" -- were NOT in that
+ * dictionary, which made the grammar fail to COMPILE at all (a hard crash
+ * the instant Voice was used), not just fail to recognize those words. Do
+ * not add a new literal word here without checking it exists in
+ * cmudict-en-us.dict first, or it will reproduce that same crash.
+ *
+ * Frequency placement is deliberately flexible: <freq> can appear BEFORE the
+ * waveform shape ("generate a 2000 hertz sine wave") or trailing with "at"
+ * AFTER it ("generate a sine wave at 2000 hertz") -- real speech uses both
+ * orders, and a grammar accepting only one is a common cause of a
+ * technically-correct command being rejected as "does not match the
+ * grammar". "me"/"the"/"please"/"now" are accepted as optional filler
+ * anywhere a person naturally adds them, for the same reason.
+ */
+grammar llmproject;
+
+public <command> =
+      <acquire>
+    | <siggen>
+    | <arb>
+    | <measure>
+    | <process>
+    | <setparam>
+    | <adjust>
+    | <control>
+    ;
+
+<please>    = [ please ] [ now ];
+<forme>     = [ for ] [ me ];
+
+<acquire>   = <please> ( acquire | capture | collect | read ) [ data ] [ for ] [ me ] [ from ]
+              ( channel ( a | b ) | both channels );
+
+<siggen>    = <please> generate [ me ] [ a ] [ the ] [ <freq> ]
+              ( sine | square | triangle | ramp up | ramp down ) [ wave ]
+              [ at <freq> ];
+
+<arb>       = <please> generate [ me ] [ an ] [ the ] arbitrary
+              [ ( sine | square | triangle | saw tooth ) ] [ waveform ];
+
+<measure>   = <please> generate [ me ] [ a ] [ the ] [ <freq> ]
+              ( sine | square | triangle ) [ wave ] [ at <freq> ]
+              and ( capture | measure | verify ) it
+              [ from channel ( a | b ) | from both channels ];
+
+<process>   = <please> ( process | analyze ) [ it | the data ];
+
+<setparam>  = <please>
+              (   set trigger level [ to ] [ <number> [ volts ] ]
+                | set trigger type [ to ] ( rising | falling )
+                | set sample count [ to ] [ <number> ]
+                | set time base [ to ] [ <number> ]
+                | set frequency [ to ] [ <freq> ]
+                | set amplitude [ to ] [ <number> [ volts ] ]
+                | set offset [ voltage ] [ to ] [ <number> [ volts ] ]
+              );
+
+<adjust>    = <please>
+              (   ( increase | decrease ) the ( amplitude | frequency | offset )
+                | double the frequency
+                | half the frequency
+              );
+
+<control>   = help | exit | quit | stop;
+
+<freq>      = <number> ( hertz | kilo hertz );
+
+<number>    = ( zero | one | two | three | four | five | six | seven | eight
+              | nine | ten | twenty | fifty | hundred | thousand
+              | <digits> );
+
+<digits>    = ( one | two | three | four | five | six | seven | eight | nine
+              | zero )+;

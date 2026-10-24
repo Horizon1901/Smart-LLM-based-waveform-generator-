@@ -1,0 +1,205 @@
+/*******************************************************************************
+ * GENERATED FILE -- DO NOT EDIT BY HAND
+ * PicoWave Assistant :: block acquisition
+ *
+ * Generation id : {{GEN_ID}}
+ * Generated at  : {{TIMESTAMP}}
+ * Voice command : "{{COMMAND_TEXT}}"
+ * Resolved intent (JSON):
+ * {{INTENT_JSON}}
+ *
+ * This program is assembled from the Pico Technology ps2000Con.c example
+ * (collect_block_immediate / collect_block_triggered). It reuses the exact
+ * PicoSDK API calls from the manufacturer implementation -- nothing is invented.
+ *
+ * Hardening over the raw manufacturer example (every failure path is explicit):
+ *   - open-with-retry, to ride out the 2000-series firmware-load USB
+ *     re-enumeration on first open (device briefly disappears then returns);
+ *   - only the requested channel(s) are enabled, so a single-channel request
+ *     gets the whole block buffer; requesting both halves the per-channel
+ *     limit, which the caller accounts for when choosing the sample count;
+ *   - the timebase search is bounded and verifies the sample count actually
+ *     fits (no unbounded int16 "timebase++" loop);
+ *   - run_block / ready / get_times_and_values returns are all checked, each
+ *     with a distinct exit code, instead of being ignored.
+ ******************************************************************************/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#ifdef WIN32
+#include "windows.h"
+#include "ps2000.h"
+#define PREF4 _stdcall
+#else
+#include <unistd.h>
+#include "libps2000/ps2000.h"
+#define PREF4
+#define Sleep(a) usleep(1000 * (a))
+#endif
+
+/* Open resilience (covers the first-open firmware re-enumeration window). */
+#define OPEN_MAX_TRIES   20
+#define OPEN_RETRY_MS    250
+/* Upper bound for the timebase search (PS2200 family max == host-side clamp). */
+#define MAX_TIMEBASE     PS2200_MAX_TIMEBASE
+/* Give up waiting for a block instead of hanging forever. */
+#define READY_TIMEOUT_MS 5000
+
+/* Input ranges in mV, indexed by PS2000_RANGE -- identical to manufacturer. */
+static int32_t input_ranges[PS2000_MAX_RANGES] =
+    {10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000};
+
+/* adc_to_mv / mv_to_adc -- copied from the manufacturer example verbatim. */
+static int32_t adc_to_mv(int32_t raw, int32_t ch) { return (raw * input_ranges[ch]) / 32767; }
+static int16_t mv_to_adc(int16_t mv,  int16_t ch) { return (int16_t)((mv * 32767) / input_ranges[ch]); }
+
+int main(void)
+{
+    int16_t  handle = 0;
+    int8_t   info[80];
+    int32_t  time_interval = 0;
+    int16_t  time_units = 0;
+    int16_t  oversample   = {{OVERSAMPLE}};
+    int32_t  no_of_samples = {{N_SAMPLES}};
+    int32_t  max_samples = 0;
+    int32_t  time_indisposed_ms = 0;
+    int16_t  overflow = 0;
+    int16_t  timebase = {{TIMEBASE}};
+    int16_t  tb;
+    int32_t  n_returned;
+    int32_t  waited_ms;
+    int      found;
+    int      open_try;
+    int      chA_on = {{CH_A_ENABLED}};
+    int      chB_on = {{CH_B_ENABLED}};
+    int32_t  i;
+    FILE    *fp;
+
+    /* Static buffers sized for the sample count. */
+    static int32_t times[{{N_SAMPLES}}];
+    static int16_t values_a[{{N_SAMPLES}}];
+    static int16_t values_b[{{N_SAMPLES}}];
+
+    (void)mv_to_adc;  /* kept for manufacturer parity; threshold is precomputed */
+
+    printf("== PicoWave acquisition {{GEN_ID}} ==\n");
+
+    /* 1. Open the device, retrying across the firmware-load re-enumeration.
+     *    A device that is briefly re-enumerating on first open returns 0/-1;
+     *    a later try picks it up once it re-appears (manufacturer: ps2000_open_unit). */
+    for (open_try = 1; open_try <= OPEN_MAX_TRIES; open_try++)
+    {
+        handle = ps2000_open_unit();
+        if (handle > 0)
+            break;
+        printf("Device not ready (attempt %d/%d), waiting for enumeration...\n",
+               open_try, OPEN_MAX_TRIES);
+        Sleep(OPEN_RETRY_MS);
+    }
+    if (handle <= 0)
+    {
+        printf("ERROR: unable to open PicoScope device\n");
+        return 99;
+    }
+    ps2000_get_unit_info(handle, info, sizeof(info), 3);
+    printf("Device variant: %s\n", (char *)info);
+
+    /* 2. Enable ONLY the requested channel so it gets the whole block buffer
+     *    (manufacturer: ps2000_set_channel per channel). */
+    ps2000_set_channel(handle, PS2000_CHANNEL_A, {{CH_A_ENABLED}}, {{DC_COUPLED}}, {{RANGE_A_ENUM}});
+    ps2000_set_channel(handle, PS2000_CHANNEL_B, {{CH_B_ENABLED}}, {{DC_COUPLED}}, {{RANGE_B_ENUM}});
+
+    /* 3. Trigger (manufacturer: ps2000_set_trigger). */
+{{TRIGGER_BLOCK}}
+
+    /* 4. Resolve a timebase that is valid AND large enough for the request.
+     *    The manufacturer loops "timebase++" on get_timebase forever; here the
+     *    loop is bounded and the returned max_samples is actually checked. */
+    found = 0;
+    for (tb = timebase; tb <= MAX_TIMEBASE; tb++)
+    {
+        if (ps2000_get_timebase(handle, tb, no_of_samples, &time_interval,
+                                &time_units, oversample, &max_samples))
+        {
+            if (no_of_samples <= max_samples)
+            {
+                timebase = tb;
+                found = 1;
+                break;
+            }
+        }
+    }
+    if (!found)
+    {
+        printf("ERROR: no timebase fits %d samples in this channel configuration "
+               "(device max %d samples)\n", no_of_samples, max_samples);
+        ps2000_close_unit(handle);
+        return 98;
+    }
+    printf("Timebase %d -> %d ns/sample, %d samples (device max %d)\n",
+           timebase, time_interval, no_of_samples, max_samples);
+
+    /* 5. Run one block and wait (manufacturer: run_block / ready / stop). */
+    if (!ps2000_run_block(handle, no_of_samples, timebase, oversample,
+                          &time_indisposed_ms))
+    {
+        printf("ERROR: ps2000_run_block was rejected by the driver\n");
+        ps2000_stop(handle);
+        ps2000_close_unit(handle);
+        return 97;
+    }
+    waited_ms = 0;
+    while (!ps2000_ready(handle))
+    {
+        Sleep(10);
+        waited_ms += 10;
+        if (waited_ms > READY_TIMEOUT_MS)
+        {
+            printf("ERROR: capture did not complete within %d ms\n", READY_TIMEOUT_MS);
+            ps2000_stop(handle);
+            ps2000_close_unit(handle);
+            return 96;
+        }
+    }
+    ps2000_stop(handle);
+
+    /* 6. Retrieve samples (manufacturer: ps2000_get_times_and_values). */
+    n_returned = ps2000_get_times_and_values(handle, times, values_a, values_b,
+                                             NULL, NULL, &overflow, time_units,
+                                             no_of_samples);
+    if (n_returned <= 0)
+    {
+        printf("ERROR: ps2000_get_times_and_values returned no data\n");
+        ps2000_close_unit(handle);
+        return 95;
+    }
+
+    /* 7. Report first samples of every enabled channel, in mV. */
+{{PRINT_BLOCK}}
+
+    /* 8. Persist full capture to CSV. A disabled channel is written as 0 so the
+     *    column layout stays stable regardless of which channel was requested. */
+    fp = fopen("acquisition_{{GEN_ID}}.csv", "w");
+    if (fp)
+    {
+        fprintf(fp, "sample,time_ns,chA_adc,chA_mv,chB_adc,chB_mv\n");
+        for (i = 0; i < n_returned; i++)
+        {
+            fprintf(fp, "%d,%d,%d,%d,%d,%d\n", i, times[i],
+                    chA_on ? values_a[i] : 0,
+                    chA_on ? adc_to_mv(values_a[i], {{RANGE_A_INDEX}}) : 0,
+                    chB_on ? values_b[i] : 0,
+                    chB_on ? adc_to_mv(values_b[i], {{RANGE_B_INDEX}}) : 0);
+        }
+        fclose(fp);
+        printf("\nSaved full capture -> acquisition_{{GEN_ID}}.csv\n");
+    }
+
+    /* 9. Summary line parsed by the executor for spoken feedback. */
+    printf("RESULT: acquired %d samples from {{CHANNEL_DESC}}, overflow=%d\n",
+           n_returned, overflow);
+
+    ps2000_close_unit(handle);
+    return 0;
+}

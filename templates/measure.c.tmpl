@@ -1,0 +1,210 @@
+/*******************************************************************************
+ * GENERATED FILE -- DO NOT EDIT BY HAND
+ * PicoWave Assistant :: generate-and-capture (loopback measurement)
+ *
+ * Generation id : {{GEN_ID}}
+ * Generated at  : {{TIMESTAMP}}
+ * Voice command : "{{COMMAND_TEXT}}"
+ * Resolved intent (JSON):
+ * {{INTENT_JSON}}
+ *
+ * WHY THIS TEMPLATE EXISTS (not just "acquire.c.tmpl again"):
+ * Running "generate" then "acquire" as two separate commands cannot work --
+ * each command is a separate process, and the executor blocks until a
+ * process fully exits. The siggen program's hold-then-close happens INSIDE
+ * that blocked call, so by the time control returns to the user the signal
+ * generator has already been closed and the output has already stopped.
+ * There is no window afterwards to "capture in time" -- the race is
+ * unwinnable by any amount of hold time or by clicking faster.
+ *
+ * This template fixes that at the root: it opens the device ONCE, starts the
+ * signal generator, captures a block WHILE the same still-open handle is
+ * driving the output, and only then closes. The signal is guaranteed live
+ * for the entire capture because nothing closes the device in between.
+ *
+ * Everything else (open-retry, bounded timebase search, checked returns,
+ * multi-channel support) is identical to acquire.c.tmpl.
+ ******************************************************************************/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#ifdef WIN32
+#include "windows.h"
+#include "ps2000.h"
+#define PREF4 _stdcall
+#else
+#include <unistd.h>
+#include "libps2000/ps2000.h"
+#define PREF4
+#define Sleep(a) usleep(1000 * (a))
+#endif
+
+#define OPEN_MAX_TRIES   20
+#define OPEN_RETRY_MS    250
+#define MAX_TIMEBASE     PS2200_MAX_TIMEBASE
+#define READY_TIMEOUT_MS 5000
+/* Let the loopback settle after the generator starts, before we sample --
+ * short enough to be unnoticeable, long enough for the output to be stable. */
+#define SETTLE_MS        150
+
+static int32_t input_ranges[PS2000_MAX_RANGES] =
+    {10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000};
+
+static int32_t adc_to_mv(int32_t raw, int32_t ch) { return (raw * input_ranges[ch]) / 32767; }
+static int16_t mv_to_adc(int16_t mv,  int16_t ch) { return (int16_t)((mv * 32767) / input_ranges[ch]); }
+
+int main(void)
+{
+    int16_t  handle = 0;
+    int8_t   info[80];
+    int32_t  time_interval = 0;
+    int16_t  time_units = 0;
+    int16_t  oversample   = {{OVERSAMPLE}};
+    int32_t  no_of_samples = {{N_SAMPLES}};
+    int32_t  max_samples = 0;
+    int32_t  time_indisposed_ms = 0;
+    int16_t  overflow = 0;
+    int16_t  timebase = {{TIMEBASE}};
+    int16_t  tb;
+    int32_t  n_returned;
+    int32_t  waited_ms;
+    int      found;
+    int      open_try;
+    int      chA_on = {{CH_A_ENABLED}};
+    int      chB_on = {{CH_B_ENABLED}};
+    int32_t  i;
+    FILE    *fp;
+
+    static int32_t times[{{N_SAMPLES}}];
+    static int16_t values_a[{{N_SAMPLES}}];
+    static int16_t values_b[{{N_SAMPLES}}];
+
+    (void)mv_to_adc;
+
+    printf("== PicoWave generate-and-capture {{GEN_ID}} ==\n");
+
+    /* 1. Open, retrying across the firmware-load USB re-enumeration. */
+    for (open_try = 1; open_try <= OPEN_MAX_TRIES; open_try++)
+    {
+        handle = ps2000_open_unit();
+        if (handle > 0)
+            break;
+        printf("Device not ready (attempt %d/%d), waiting for enumeration...\n",
+               open_try, OPEN_MAX_TRIES);
+        Sleep(OPEN_RETRY_MS);
+    }
+    if (handle <= 0)
+    {
+        printf("ERROR: unable to open PicoScope device\n");
+        return 99;
+    }
+    ps2000_get_unit_info(handle, info, sizeof(info), 3);
+    printf("Device variant: %s\n", (char *)info);
+
+    /* 2. Start the signal generator FIRST, on this same still-open handle.
+     *    It stays live for the rest of this program -- through channel setup,
+     *    trigger, and the entire capture -- because we never close early. */
+    ps2000_set_sig_gen_built_in(handle, {{OFFSET_UV}}, {{PKTOPK_UV}},
+                                {{WAVE_ENUM}}, {{FREQUENCY}}, {{FREQUENCY}},
+                                0.0, 0.0, PS2000_UPDOWN, 0);
+    printf("Signal generator: {{WAVE_NAME}} at {{FREQUENCY}} Hz, "
+           "{{PKTOPK_UV}} uVpp, offset {{OFFSET_UV}} uV\n");
+    Sleep(SETTLE_MS);
+
+    /* 3. Enable the requested capture channel(s). */
+    ps2000_set_channel(handle, PS2000_CHANNEL_A, {{CH_A_ENABLED}}, {{DC_COUPLED}}, {{RANGE_A_ENUM}});
+    ps2000_set_channel(handle, PS2000_CHANNEL_B, {{CH_B_ENABLED}}, {{DC_COUPLED}}, {{RANGE_B_ENUM}});
+
+    /* 4. Trigger. */
+{{TRIGGER_BLOCK}}
+
+    /* 5. Bounded timebase search, verified against the real device max. */
+    found = 0;
+    for (tb = timebase; tb <= MAX_TIMEBASE; tb++)
+    {
+        if (ps2000_get_timebase(handle, tb, no_of_samples, &time_interval,
+                                &time_units, oversample, &max_samples))
+        {
+            if (no_of_samples <= max_samples)
+            {
+                timebase = tb;
+                found = 1;
+                break;
+            }
+        }
+    }
+    if (!found)
+    {
+        printf("ERROR: no timebase fits %d samples in this channel configuration "
+               "(device max %d samples)\n", no_of_samples, max_samples);
+        ps2000_close_unit(handle);
+        return 98;
+    }
+    printf("Timebase %d -> %d ns/sample, %d samples (device max %d)\n",
+           timebase, time_interval, no_of_samples, max_samples);
+
+    /* 6. Run one block WHILE the generator is still driving the output. */
+    if (!ps2000_run_block(handle, no_of_samples, timebase, oversample,
+                          &time_indisposed_ms))
+    {
+        printf("ERROR: ps2000_run_block was rejected by the driver\n");
+        ps2000_stop(handle);
+        ps2000_close_unit(handle);
+        return 97;
+    }
+    waited_ms = 0;
+    while (!ps2000_ready(handle))
+    {
+        Sleep(10);
+        waited_ms += 10;
+        if (waited_ms > READY_TIMEOUT_MS)
+        {
+            printf("ERROR: capture did not complete within %d ms\n", READY_TIMEOUT_MS);
+            ps2000_stop(handle);
+            ps2000_close_unit(handle);
+            return 96;
+        }
+    }
+    ps2000_stop(handle);
+
+    /* 7. Retrieve samples. */
+    n_returned = ps2000_get_times_and_values(handle, times, values_a, values_b,
+                                             NULL, NULL, &overflow, time_units,
+                                             no_of_samples);
+    if (n_returned <= 0)
+    {
+        printf("ERROR: ps2000_get_times_and_values returned no data\n");
+        ps2000_close_unit(handle);
+        return 95;
+    }
+
+    /* 8. Report first samples of every enabled channel, in mV. */
+{{PRINT_BLOCK}}
+
+    /* 9. Persist full capture to CSV. */
+    fp = fopen("acquisition_{{GEN_ID}}.csv", "w");
+    if (fp)
+    {
+        fprintf(fp, "sample,time_ns,chA_adc,chA_mv,chB_adc,chB_mv\n");
+        for (i = 0; i < n_returned; i++)
+        {
+            fprintf(fp, "%d,%d,%d,%d,%d,%d\n", i, times[i],
+                    chA_on ? values_a[i] : 0,
+                    chA_on ? adc_to_mv(values_a[i], {{RANGE_A_INDEX}}) : 0,
+                    chB_on ? values_b[i] : 0,
+                    chB_on ? adc_to_mv(values_b[i], {{RANGE_B_INDEX}}) : 0);
+        }
+        fclose(fp);
+        printf("\nSaved full capture -> acquisition_{{GEN_ID}}.csv\n");
+    }
+
+    /* 10. Summary line parsed by the executor for spoken feedback -- names
+     *     both what was generated and what was captured, since this command
+     *     did both in one guaranteed-live session. */
+    printf("RESULT: generated {{WAVE_NAME}} at {{FREQUENCY}} Hz and acquired "
+           "%d samples from {{CHANNEL_DESC}}, overflow=%d\n", n_returned, overflow);
+
+    ps2000_close_unit(handle);
+    return 0;
+}

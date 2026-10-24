@@ -1,0 +1,15 @@
+# Sample command batch for PicoWave Assistant (used by tests + demos)
+acquire data from channel A
+set sample count to 512
+set timebase to 6
+acquire data from channel B
+generate a 1 kHz sine wave
+generate a 2 kHz square wave
+generate a triangle wave
+set trigger level to 500 millivolts
+set trigger type to falling
+acquire data from channel A
+set amplitude to 3000
+set offset to 200
+generate an arbitrary sawtooth waveform
+exit

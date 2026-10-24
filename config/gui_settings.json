@@ -1,0 +1,21 @@
+{
+  "sdk_mode": "mock",
+  "llm_choice": "mock",
+  "session_state": {
+    "channel": "A",
+    "range_enum": "PS2000_5V",
+    "dc_coupled": 1,
+    "n_samples": 1024,
+    "timebase": 8,
+    "oversample": 1,
+    "trigger_enabled": false,
+    "trigger_level_mv": 0,
+    "trigger_direction": "rising",
+    "siggen_wave": "square",
+    "siggen_freq_hz": 1000,
+    "amplitude_mvpp": 2000,
+    "offset_mv": 0,
+    "arb_shape": "sine",
+    "hold_ms": 8000
+  }
+}
